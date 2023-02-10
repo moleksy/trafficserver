@@ -1390,14 +1390,14 @@ SSLNetVConnection::sslServerHandShakeEvent(int &err)
       }
     }
 
-#if TS_USE_TLS_ASYNC
+/*#if TS_USE_TLS_ASYNC
     if (SSLConfigParams::async_handshake_enabled) {
       SSL_clear_mode(ssl, SSL_MODE_ASYNC);
       if (async_ep.fd >= 0) {
         async_ep.stop();
       }
     }
-#endif
+#endif*/
     return EVENT_DONE;
 
   case SSL_ERROR_WANT_CONNECT:
