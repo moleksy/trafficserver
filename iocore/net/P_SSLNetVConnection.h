@@ -508,6 +508,7 @@ private:
   void _make_ssl_connection(SSL_CTX *ctx);
   void _bindSSLObject();
   void _unbindSSLObject();
+  bool asyncModeSet;
 
   int _ssl_read_from_net(EThread *lthread, int64_t &ret);
   ssl_error_t _ssl_read_buffer(void *buf, int64_t nbytes, int64_t &nread);

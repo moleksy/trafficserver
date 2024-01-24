@@ -890,7 +890,9 @@ SSLNetVConnection::load_buffer_and_write(int64_t towrite, MIOBufferAccessor &buf
   return num_really_written;
 }
 
-SSLNetVConnection::SSLNetVConnection() {}
+SSLNetVConnection::SSLNetVConnection()
+    : asyncModeSet(false) {}
+
 
 void
 SSLNetVConnection::do_io_close(int lerrno)
@@ -984,6 +986,14 @@ void
 SSLNetVConnection::free_thread(EThread *t)
 {
   ink_release_assert(t == this_ethread());
+
+  #if TS_USE_TLS_ASYNC
+    if (SSLConfigParams::async_handshake_enabled) {
+      if (async_ep.fd >= 0) {
+        async_ep.stop();
+      }
+    }
+  #endif
 
   // close socket fd
   if (con.fd != NO_FD) {
@@ -1244,10 +1254,13 @@ SSLNetVConnection::sslServerHandShakeEvent(int &err)
       // Is this the first read?
       if (!this->handShakeReader->is_read_avail_more_than(0) && !this->handShakeHolder->is_read_avail_more_than(0)) {
 #if TS_USE_TLS_ASYNC
-        if (SSLConfigParams::async_handshake_enabled) {
-          SSL_set_mode(ssl, SSL_MODE_ASYNC);
-        }
+          if (SSLConfigParams::async_handshake_enabled && !this->asyncModeSet)
+          {
+            SSL_set_mode(ssl, SSL_MODE_ASYNC);
+            this->asyncModeSet = true; // Set the flag to true after setting SSL_MODE_ASYNC
+          }
 #endif
+
 
         Debug("ssl", "%p first read\n", this);
         // Read from socket to fill in the BIO buffer with the
@@ -1373,14 +1386,14 @@ SSLNetVConnection::sslServerHandShakeEvent(int &err)
       }
     }
 
-#if TS_USE_TLS_ASYNC
+/*#if TS_USE_TLS_ASYNC
     if (SSLConfigParams::async_handshake_enabled) {
       SSL_clear_mode(ssl, SSL_MODE_ASYNC);
       if (async_ep.fd >= 0) {
         async_ep.stop();
       }
     }
-#endif
+#endif*/
     return EVENT_DONE;
 
   case SSL_ERROR_WANT_CONNECT:

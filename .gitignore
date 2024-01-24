@@ -220,3 +220,15 @@ tests/gold_tests/tls/ssl-post
 
 iocore/cache/test_*
 iocore/cache/test/var/trafficserver/cache.db
+*.vsidx
+*.db
+*.lock
+*.db-shm
+*.db-wal
+*.opendb
+*.sln
+*.ipch
+*.filters
+*.vcxproj
+*.user
+.vs/Trafficserver-my-changes/v17/.suo
