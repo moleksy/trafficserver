@@ -656,32 +656,36 @@ EventIO::start_common(EventLoop l, int afd, int e)
 
   fd         = afd;
   event_loop = l;
+
 #if TS_USE_EPOLL
-  struct epoll_event ev;
-  memset(&ev, 0, sizeof(ev));
-  ev.events   = e | EPOLLEXCLUSIVE;
-  ev.data.ptr = this;
+  struct epoll_event ev = { .events = e | EPOLLEXCLUSIVE, .data = { .ptr = this }};
 #ifndef USE_EDGE_TRIGGER
   events = e;
 #endif
   return epoll_ctl(event_loop->epoll_fd, EPOLL_CTL_ADD, fd, &ev);
-#endif
-#if TS_USE_KQUEUE
+
+#elif TS_USE_KQUEUE
   events = e;
   struct kevent ev[2];
   int n = 0;
-  if (e & EVENTIO_READ)
+  if (e & EVENTIO_READ) {
     EV_SET(&ev[n++], fd, EVFILT_READ, EV_ADD | INK_EV_EDGE_TRIGGER, 0, 0, this);
-  if (e & EVENTIO_WRITE)
+  }
+  if (e & EVENTIO_WRITE) {
     EV_SET(&ev[n++], fd, EVFILT_WRITE, EV_ADD | INK_EV_EDGE_TRIGGER, 0, 0, this);
-  return kevent(l->kqueue_fd, &ev[0], n, nullptr, 0, nullptr);
-#endif
-#if TS_USE_PORT
-  events     = e;
+  }
+  return kevent(l->kqueue_fd, ev, n, nullptr, 0, nullptr);
+
+#elif TS_USE_PORT
+  events = e;
   int retval = port_associate(event_loop->port_fd, PORT_SOURCE_FD, fd, events, this);
-  Debug("iocore_eventio", "[EventIO::start] e(%d), events(%d), %d[%s]=port_associate(%d,%d,%d,%d,%p)", e, events, retval,
-        retval < 0 ? strerror(errno) : "ok", event_loop->port_fd, PORT_SOURCE_FD, fd, events, this);
+  if (retval < 0) {
+    Debug("iocore_eventio", "[EventIO::start] error associating port: %s", strerror(errno));
+  }
   return retval;
+
+#else
+  Debug("iocore_eventio", "Unsupported platform for EventIO::start_common");
 #endif
 }
 
