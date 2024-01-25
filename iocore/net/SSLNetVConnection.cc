@@ -90,24 +90,25 @@ public:
               int eventId = EVENT_IMMEDIATE, ///< Event ID for invocation of @a target.
               void *edata = nullptr          ///< Data for invocation of @a target.
               )
-    : Continuation(mutex), _target(target), _eventId(eventId), _edata(edata)
-  {
-    SET_HANDLER(&ContWrapper::event_handler);
-  }
+      : Continuation(mutex), _target(target), _eventId(eventId), _edata(edata) {}
 
   /// Required event handler method.
-  int
-  event_handler(int, void *)
-  {
+  int event_handler(int, void *) override {
     EThread *eth = this_ethread();
 
-    MUTEX_TRY_LOCK(lock, _target->mutex, eth);
-    if (lock.is_locked()) { // got the target lock, we can proceed.
-      _target->handleEvent(_eventId, _edata);
-      delete this;
-    } else { // can't get both locks, try again.
+    // Continuously attempt to acquire the target lock until successful
+    while (!_target->mutex->try_lock(eth)) {
+      // Schedule a retry on the dedicated event processor thread
       eventProcessor.schedule_imm(this, ET_NET);
+
+      // Yield to other threads to avoid blocking the current thread
+      eventProcessor.yield();
     }
+
+    // Target lock acquired, proceed with invocation
+    _target->handleEvent(_eventId, _edata);
+    delete this;
+
     return 0;
   }
 
@@ -129,14 +130,17 @@ public:
   )
   {
     EThread *eth = this_ethread();
+
     if (!target->mutex) {
-      // If there's no mutex, plugin doesn't care about locking so why should we?
+      // No mutex for target continuation, handle event directly
       target->handleEvent(eventId, edata);
     } else {
+      // Attempt to acquire the target lock and proceed if successful
       MUTEX_TRY_LOCK(lock, target->mutex, eth);
       if (lock.is_locked()) {
         target->handleEvent(eventId, edata);
       } else {
+        // Schedule a `ContWrapper` continuation for lock acquisition
         eventProcessor.schedule_imm(new ContWrapper(mutex, target, eventId, edata), ET_NET);
       }
     }
@@ -146,6 +150,7 @@ private:
   Continuation *_target; ///< Continuation to invoke.
   int _eventId;          ///< with this event
   void *_edata;          ///< and this data
+
 };
 } // namespace
 
