@@ -2144,48 +2144,69 @@ SSLNetVConnection::_ssl_connect()
 ssl_error_t
 SSLNetVConnection::_ssl_write_buffer(const void *buf, int64_t nbytes, int64_t &nwritten)
 {
-  nwritten = 0;
+    if (unlikely(nbytes == 0)) {
+        return SSL_ERROR_NONE;
+    }
+    ERR_clear_error();
 
-  if (unlikely(nbytes == 0)) {
-    return SSL_ERROR_NONE;
-  }
-  ERR_clear_error();
-
-  int ret;
-#if TS_HAS_TLS_EARLY_DATA
-  if (SSL_version(ssl) >= TLS1_3_VERSION) {
-    if (SSL_is_init_finished(ssl)) {
-      ret = SSL_write(ssl, buf, static_cast<int>(nbytes));
+    int ret;
+    #if TS_HAS_TLS_EARLY_DATA
+    if (SSL_version(ssl) >= TLS1_3_VERSION) {
+        if (SSL_is_init_finished(ssl)) {
+            ret = SSL_write(ssl, buf, static_cast<int>(nbytes));
+        } else {
+            size_t nwrite;
+            ret = SSL_write_early_data(ssl, buf, static_cast<size_t>(nbytes), &nwrite);
+            if (ret == 1) {
+                ret = nwrite;
+            }
+        }
     } else {
-      size_t nwrite;
-      ret = SSL_write_early_data(ssl, buf, static_cast<size_t>(nbytes), &nwrite);
-      if (ret == 1) {
-        ret = nwrite;
-      }
+        ret = SSL_write(ssl, buf, static_cast<int>(nbytes));
     }
-  } else {
+    #else
     ret = SSL_write(ssl, buf, static_cast<int>(nbytes));
-  }
-#else
-  ret = SSL_write(ssl, buf, static_cast<int>(nbytes));
-#endif
+    #endif
 
-  if (ret > 0) {
-    nwritten = ret;
-    BIO *bio = SSL_get_wbio(ssl);
-    if (bio != nullptr) {
-      (void)BIO_flush(bio);
+    if (ret > 0) {
+        nwritten = ret;
+        BIO *bio = SSL_get_wbio(ssl);
+        if (bio != nullptr) {
+            (void)BIO_flush(bio);
+        }
+        return SSL_ERROR_NONE;
     }
-    return SSL_ERROR_NONE;
-  }
-  int ssl_error = SSL_get_error(ssl, ret);
-  if (ssl_error == SSL_ERROR_SSL && is_debug_tag_set("ssl.error.write")) {
-    char tempbuf[512];
-    unsigned long e = ERR_peek_last_error();
-    ERR_error_string_n(e, tempbuf, sizeof(tempbuf));
-    Debug("ssl.error.write", "SSL write returned %d, ssl_error=%d, ERR_get_error=%ld (%s)", ret, ssl_error, e, tempbuf);
-  }
-  return ssl_error;
+
+    int ssl_error = SSL_get_error(ssl, ret);
+    #if TS_USE_TLS_ASYNC
+    if (ssl_error == SSL_ERROR_WANT_WRITE || ssl_error == SSL_ERROR_WANT_READ) {
+        // Check if the async eventfd is already registered
+        if (async_ep.fd < 0) {
+            size_t numfds;
+            OSSL_ASYNC_FD *waitfds;
+            // Set up the epoll entry for the signalling
+            if (SSL_get_all_async_fds(ssl, nullptr, &numfds) && numfds > 0) {
+                waitfds = reinterpret_cast<OSSL_ASYNC_FD *>(alloca(sizeof(OSSL_ASYNC_FD) * numfds));
+                if (SSL_get_all_async_fds(ssl, waitfds, &numfds) && numfds > 0) {
+                    this->read.triggered  = false;
+                    this->write.triggered = false;
+                    // Configure the event polling based on the error
+                    this->async_ep.start(get_PollDescriptor(this_ethread()), waitfds[0], static_cast<NetEvent *>(this),
+                                         (ssl_error == SSL_ERROR_WANT_WRITE) ? EVENTIO_WRITE : EVENTIO_READ);
+                    this->async_ep.type = EVENTIO_READWRITE_VC;
+                }
+            }
+        }
+        return ssl_error;
+    }
+    #endif
+    if (ssl_error == SSL_ERROR_SSL && is_debug_tag_set("ssl.error.write")) {
+        char tempbuf[512];
+        unsigned long e = ERR_peek_last_error();
+        ERR_error_string_n(e, tempbuf, sizeof(tempbuf));
+        Debug("ssl.error.write", "SSL write returned %d, ssl_error=%d, ERR_get_error=%ld (%s)", ret, ssl_error, e, tempbuf);
+    }
+    return ssl_error;
 }
 
 ssl_error_t
